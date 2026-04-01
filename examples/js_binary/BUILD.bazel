@@ -306,6 +306,11 @@ write_file(
         js_binary(
             name = "bin5_%s" % t,
             entry_point = "case5.%s" % t,
+            # Error [ERR_UNSUPPORTED_ESM_URL_SCHEME]: Only URLs with a scheme in: file, data, and node are supported by the default ESM loader. On Windows, absolute paths must be valid file:// URLs. Received protocol 'd:'
+            target_compatible_with = select({
+                "@platforms//os:windows": ["@platforms//:incompatible"],
+                "//conditions:default": [],
+            }),
         ),
         js_run_binary(
             name = "run5_%s" % t,
@@ -319,11 +324,6 @@ write_file(
             name = "test5_%s" % t,
             file1 = "expected5",
             file2 = "out5_%s" % t,
-            # Error [ERR_UNSUPPORTED_ESM_URL_SCHEME]: Only URLs with a scheme in: file, data, and node are supported by the default ESM loader. On Windows, absolute paths must be valid file:// URLs. Received protocol 'd:'
-            target_compatible_with = select({
-                "@platforms//os:windows": ["@platforms//:incompatible"],
-                "//conditions:default": [],
-            }),
         ),
     ]
     for t in [
