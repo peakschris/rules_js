@@ -160,6 +160,7 @@ If set, takes precedence over the package version in the `NpmPackageInfo` src.
     "verbose": attr.bool(
         doc = """If true, prints out verbose logs to stdout""",
     ),
+    "_windows_constraint": attr.label(default = "@platforms//os:windows"),
 }
 
 def _npm_package_store_impl(ctx):
@@ -236,6 +237,37 @@ def _npm_package_store_impl(ctx):
                 # executable which make the directories not listable (pngjs@5.0.0 for example).
                 bsdtar = ctx.toolchains[tar_lib.toolchain_type]
 
+                # On Windows, `tar --directory <dir>` chdir's into <dir> via
+                # SetCurrentDirectory, which is hard-capped at MAX_PATH (260 chars)
+                # even when LongPathsEnabled=1 -- the current directory is the one
+                # Win32 path operation that never honors the `\\?\` long-path prefix.
+                # Deep npm package store paths (e.g. babel's long peer-resolved
+                # placeholder names under react-scripts) exceed this and fail with
+                # "tar.exe: could not chdir to ...". The minimal Windows bsdtar in
+                # this toolchain also does not support the `-s` path-rewrite that
+                # would let us avoid the chdir. So on Windows we extract into a
+                # SHORT-named staging TreeArtifact (chdir target stays well under
+                # MAX_PATH), then copy_directory -- which is long-path aware -- into
+                # the final deep store TreeArtifact. Once cwd is the short staging
+                # dir, tar creates the package's own (possibly deep) entries via
+                # CreateFileW, which does honor long paths. On non-Windows the
+                # original single-step extract into the store dir is unchanged.
+                is_windows = ctx.target_platform_has_constraint(ctx.attr._windows_constraint[platform_common.ConstraintValueInfo])
+
+                # The destination for the tar chdir/extract: the real store dir on
+                # non-Windows; a short-named staging dir on Windows. The staging name
+                # must be globally unique (all internal store targets live in the
+                # root package) yet short, so derive it from a 64-bit hash of the
+                # store path rather than the long store name itself.
+                if is_windows:
+                    stage_id = "%x_%x" % (
+                        hash(package_store_directory_path) & 0xffffffff,
+                        hash("aspect_rules_js:" + package_store_directory_path) & 0xffffffff,
+                    )
+                    tar_out = ctx.actions.declare_directory("_npm_extract_stage/" + stage_id)
+                else:
+                    tar_out = package_store_directory
+
                 args = ctx.actions.args()
                 args.add_all(
                     [
@@ -247,7 +279,9 @@ def _npm_package_store_impl(ctx):
                         "--file",
                         src,
                         "--directory",
-                        package_store_directory,
+                        # On Windows this is the short-named staging dir (see above);
+                        # on non-Windows it is the real store dir.
+                        tar_out,
                     ],
                     expand_directories = False,
                 )
@@ -257,7 +291,7 @@ def _npm_package_store_impl(ctx):
                 ctx.actions.run(
                     executable = bsdtar.tarinfo.binary,
                     inputs = [src],
-                    outputs = [package_store_directory],
+                    outputs = [tar_out],
                     arguments = [args],
                     mnemonic = "NpmPackageExtract",
                     progress_message = "Extracting npm package {}@{}".format(package, version),
@@ -268,6 +302,19 @@ def _npm_package_store_impl(ctx):
                     # See https://github.com/aspect-build/rules_js/issues/2039
                     env = getattr(bsdtar.tarinfo, "default_env", {}),
                 )
+
+                if is_windows:
+                    # Move the staged extract into the deep store TreeArtifact using
+                    # the long-path-aware copy_directory binary (same one used for the
+                    # non-tarball case below).
+                    copy_directory_bin_action(
+                        ctx,
+                        src = tar_out,
+                        dst = package_store_directory,
+                        copy_directory_bin = ctx.toolchains["@bazel_lib//lib:copy_directory_toolchain_type"].copy_directory_info.bin,
+                        hardlink = ctx.attr.hardlink,
+                        verbose = ctx.attr.verbose,
+                    )
             else:
                 copy_directory_bin_action(
                     ctx,
