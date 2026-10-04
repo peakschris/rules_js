@@ -34,7 +34,7 @@ def assert_tar_listing(name, actual, expected):
         testonly = True,
         outs = ["_{}.listing".format(name)],
         # TODO: now that app layer has repo_mapping file in it which is not stable between different operating systems
-        # we need to exlude it from checksums
+        # we need to exclude it from checksums
         # See: https://github.com/aspect-build/rules_js/actions/runs/11749187598/job/32734931009?pr=2011
         cmd = 'TZ="UTC" LC_ALL="en_US.UTF-8" $(BSDTAR_BIN) -tvf $(execpath {}) --exclude "**/_repo_mapping" | {} >$@'.format(actual, sanitize_cmd),
         toolchains = ["@bsd_tar_toolchains//:resolved_toolchain"],
@@ -108,7 +108,7 @@ def assert_checksum(name, image_layer):
         srcs = ["{}_{}".format(image_layer, layer) for layer in layers],
         outs = [name + ".checksums"],
         # TODO: now that app layer has repo_mapping file in it which is not stable between different operating systems
-        # we need to exlude it from checksums
+        # we need to exclude it from checksums
         # See: https://github.com/aspect-build/rules_js/actions/runs/11749187598/job/32734931009?pr=2011
         cmd = """
 COREUTILS_BIN=$$(realpath $(COREUTILS_BIN)) &&
