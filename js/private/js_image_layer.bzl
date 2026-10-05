@@ -519,11 +519,12 @@ def _js_image_layer_impl(ctx):
         outputs.append(output)
         output_groups[typ] = depset([output])
 
-        # Guard wrapper argv: `<guard.mjs> --tar <tar-bin> --output <archive> --`
+        # Guard wrapper argv: `<guard.mjs> --tar <tar-bin> --output <archive> --mtree <mtree> --`
         guard_args = ctx.actions.args()
         guard_args.add(tar_guard.path)
         guard_args.add("--tar", tarinfo.binary)
         guard_args.add("--output", output)
+        guard_args.add("--mtree", mtree)
         guard_args.add("--")
 
         # tar-create argv, forwarded verbatim after the `--` separator.
