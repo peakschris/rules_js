@@ -196,10 +196,15 @@ fi
 
 function resolve_execroot_bin_path {
     local short_path="$1"
+    local rel="$short_path"
     if [[ "$short_path" == ../* ]]; then
-        echo "$execroot/$BAZEL_BINDIR/external/${short_path:3}"
+        rel="external/${short_path:3}"
+    fi
+    # Tools built in the exec config live under JS_BINARY__BINDIR, not the caller's BAZEL_BINDIR.
+    if [ ! -e "$execroot/$BAZEL_BINDIR/$rel" ] && [ "${JS_BINARY__BINDIR:-}" ] && [ -e "$execroot/$JS_BINARY__BINDIR/$rel" ]; then
+        echo "$execroot/$JS_BINARY__BINDIR/$rel"
     else
-        echo "$execroot/$BAZEL_BINDIR/$short_path"
+        echo "$execroot/$BAZEL_BINDIR/$rel"
     fi
 }
 
