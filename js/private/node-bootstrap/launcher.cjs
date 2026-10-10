@@ -103,7 +103,13 @@ if (inheritedExecroot) {
 // resolves from the launch directory), so it is the execroot even if its path contains a
 // "bazel-out" segment (e.g. a matching output base). Otherwise scan the output tree for the
 // execroot (runfiles, or a nested js_binary in the bindir).
-if (bazelOutSegment && (!bindir || !isDirectory(path.join(startCwd, bindir)))) {
+// Without a runfiles tree a test starts in its empty runfiles dir; the launcher script found the execroot.
+const noRunfilesExecroot = process.env.JS_BINARY__NO_RUNFILES_EXECROOT
+delete process.env.JS_BINARY__NO_RUNFILES_EXECROOT
+
+if (noRunfilesExecroot) {
+    process.env.JS_BINARY__EXECROOT = noRunfilesExecroot
+} else if (bazelOutSegment && (!bindir || !isDirectory(path.join(startCwd, bindir)))) {
     if (!inheritedExecroot) {
         // We are in runfiles and we don't yet know the execroot; strip from the last
         // "bazel-out" segment.
@@ -314,6 +320,10 @@ if (process.env.JS_BINARY__CHDIR) {
         dir.startsWith('external/')
     ) {
         dir = '../' + dir.slice('external/'.length)
+    }
+    // With no runfiles tree the package sits in the output tree under the execroot instead.
+    if (noRunfilesExecroot && process.env.JS_BINARY__BINDIR) {
+        dir = path.join(noRunfilesExecroot, process.env.JS_BINARY__BINDIR, dir)
     }
     try {
         process.chdir(dir)

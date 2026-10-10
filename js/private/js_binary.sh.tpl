@@ -174,6 +174,12 @@ else
     execroot="$PWD"
 fi
 
+# Without a runfiles tree a test is started in its runfiles dir, not the execroot; derive the execroot from the output tree.
+if [ "${JS_BINARY__NO_RUNFILES:-}" ] && [ ! -d "$execroot/bazel-out" ] && [[ "$execroot" == */bazel-out/* ]]; then
+    execroot="${execroot%/bazel-out/*}"
+    export JS_BINARY__NO_RUNFILES_EXECROOT="$execroot"
+fi
+
 # Build actions are started in the execroot, so change into the root of the Bazel output tree,
 # which is where js_binary programs run. See
 # https://github.com/aspect-build/rules_js/tree/dbb5af0d2a9a2bb50e4cf4a96dbc582b27567155#running-nodejs-programs
