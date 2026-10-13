@@ -305,11 +305,11 @@ rem like `--node_options=--require=<path>`. The raw %* preserves '='. The
 rem `set "_rt_arg="` + `if not defined` guard makes the loop terminate rather than
 rem spin if `for /f` skips a token.
 set "_rt_rest=%*"
-if defined _bazel_bindir_from_flag (
-    rem Drop the consumed `--bazel-bindir <value>` (first two space-delimited tokens).
-    set "_rt_rest="
-    for /f "tokens=2* delims= " %%a in ("%*") do set "_rt_rest=%%b"
-)
+rem Drop the consumed `--bazel-bindir <value>` (first two space-delimited tokens). This is a
+rem single line working on _rt_rest, not a block holding %*: cmd expands %* when it parses
+rem the block, whether or not the flag is present, so a runtime arg with a parenthesis
+rem or a quote would break the parse of every launch.
+if defined _bazel_bindir_from_flag for /f "tokens=2* delims= " %%a in ("!_rt_rest!") do set "_rt_rest=%%b"
 :process_runtime_arg
 if not defined _rt_rest goto :process_runtime_args_done
 set "_rt_arg="
