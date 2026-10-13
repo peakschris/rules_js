@@ -740,6 +740,18 @@ def _bat_launcher(ctx, entry_point_path, log_prefix_rule_set, log_prefix_rule, f
     paths; js_binary.bat.tpl is a faithful translation of js_binary.sh.tpl.
     """
     launcher_subst = {
+        # Line endings. cmd.exe cannot reliably find a `:label` in a batch file with bare-LF line
+        # endings: it reads the file in 512-byte blocks and a label at certain block offsets is
+        # not found ("The system cannot find the batch label specified"), depending only on the
+        # byte layout of the file. A CRLF file has no such offsets (swept over all 512 residues),
+        # so normalize the whole launcher to CRLF. The template is LF in git and the multi-line
+        # values below are joined with LF.
+        #
+        # expand_template applies the substitutions in dict order, each over the whole text. This
+        # first key undoes a CRLF checkout of the template (preventing CR CR LF); the LF key at
+        # the very end then converts every line ending, including those of the values substituted
+        # in between, to CRLF.
+        "\r\n": "\n",
         "{{target_label}}": str(ctx.label),
         "{{template_label}}": str(ctx.attr._launcher_template_bat.label),
         "{{entry_point_label}}": str(ctx.attr.entry_point.label),
@@ -763,6 +775,7 @@ def _bat_launcher(ctx, entry_point_path, log_prefix_rule_set, log_prefix_rule, f
         "{{node}}": _windows_path(paths.node_path),
         "{{npm}}": _windows_path(paths.npm_path),
         "{{workspace_name}}": ctx.workspace_name,
+        "\n": "\r\n",  # must stay last, see above
     }
 
     # Named like the bash launcher (see the comment there); the '.bat' extension lets cmd and
