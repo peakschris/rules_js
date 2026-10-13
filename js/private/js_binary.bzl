@@ -3,11 +3,11 @@
 load("@bazel_lib//lib:copy_to_bin.bzl", "COPY_FILE_TO_BIN_TOOLCHAINS")
 load("@bazel_lib//lib:directory_path.bzl", "DirectoryPathInfo")
 load("@bazel_lib//lib:expand_make_vars.bzl", "expand_locations", "expand_variables")
-load("@bazel_lib//lib:windows_utils.bzl", "create_windows_native_launcher_script")
 load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
 load("@hermetic_launcher//launcher:lib.bzl", hermetic_launcher = "launcher")
 load("//js/private/coverage:extensions.bzl", "COVERAGE_EXTENSIONS")
 load(":bash.bzl", "BASH_INITIALIZE_RUNFILES")
+load(":bat.bzl", "BAT_INITIALIZE_RUNFILES")
 load(":js_helpers.bzl", "LOG_LEVELS", "envs_for_log_level", "gather_files_from_js_infos", "gather_runfiles", "normalize_chdir")
 
 _ATTRS = {
@@ -252,6 +252,11 @@ _ATTRS = {
         default = Label("//js/private:js_binary.sh.tpl"),
         allow_single_file = True,
     ),
+    # The Windows counterpart of _launcher_template, used by the bash (non-hermetic) path.
+    "_launcher_template_bat": attr.label(
+        default = Label("//js/private:js_binary.bat.tpl"),
+        allow_single_file = True,
+    ),
     "_launcher_js_template": attr.label(
         default = Label("//js/private:js_binary.cjs.tpl"),
         allow_single_file = True,
@@ -314,6 +319,13 @@ _NODE_OPTION = """JS_BINARY__NODE_OPTIONS+=(\"{value}\")"""
 _ENV_SET_JS = """setEnv({quoted_var}, {value_expr})"""
 _ENV_SET_IFF_NOT_SET_JS = """setEnvIfUnset({quoted_var}, {value_expr})"""
 _NODE_OPTION_JS = """addNodeOption({quoted_value})"""
+
+# The same three, in the Windows batch launcher's syntax. The value is placed inside a
+# `set "VAR=..."` statement; _bat_value handles the batch escaping. _NODE_OPTION_WINDOWS
+# appends under delayed expansion, so JS_BINARY__NODE_OPTIONS must be reset to empty first.
+_ENV_SET_WINDOWS = '''set "{var}={value}"'''
+_ENV_SET_IFF_NOT_SET_WINDOWS = '''if not defined {var} set "{var}={value}"'''
+_NODE_OPTION_WINDOWS = '''set "JS_BINARY__NODE_OPTIONS=!JS_BINARY__NODE_OPTIONS! {value}"'''
 
 # An image runs the launcher from the container's working directory on whatever CPU the
 # container has, so these two values, baked in here at analysis time, are wrong there.
@@ -474,6 +486,41 @@ def _shell_tokenize(value):
         tokens.append(_append_segment(segments, current, expand))
     return tokens
 
+def _windows_path(path):
+    """Converts a short_path's forward slashes to the backslashes the batch launcher joins with.
+
+    The batch launcher classifies external paths by a literal `..\\` prefix and joins path
+    segments with backslashes, so every path baked into it (node, npm, launcher preload, entry
+    point) must use backslashes rather than the forward slashes a short_path carries.
+    """
+    return path.replace("/", "\\")
+
+def _bat_value(value):
+    """Escapes a string for inclusion inside a batch `set "VAR=<value>"` statement.
+
+    A literal percent sign must be doubled so cmd does not treat it as a variable reference.
+    Backslashes, spaces and most punctuation are safe inside the quotes. A literal `!` is not
+    handled (delayed expansion would eat it); it does not occur in the values baked in here.
+    """
+    return value.replace("%", "%%")
+
+def _bat_fixed_args(fixed_args):
+    """Renders fixed_args as a batch block of `call :process_arg "<token>"` statements.
+
+    The tokens match the JavaScript launcher's (_shell_tokenize), so the word splitting and
+    quote removal the bash launcher gets from the shell is reproduced at analysis time. Two
+    things bash does are deliberately not reproduced, both obscure and without a clean batch
+    equivalent: runtime `$VAR` expansion of an unquoted segment (the token's text is taken
+    literally), and preserving an embedded space in a single token (process_arg appends to an
+    unquoted ARGS, as the earlier Windows port did); quote such arguments to keep them literal.
+    """
+    lines = []
+    for fixed_arg in fixed_args:
+        for token in _shell_tokenize(fixed_arg):
+            text = "".join([segment[0] for segment in token])
+            lines.append('call :process_arg "{}"'.format(_bat_value(text)))
+    return "\n".join(lines)
+
 def _generates_coverage_report(ctx):
     """Whether the launcher generates the lcov report in the test action. See #2901."""
     return (hasattr(ctx.file, "_coverage_report") and
@@ -630,6 +677,55 @@ def _bash_launcher(ctx, entry_point_path, log_prefix_rule_set, log_prefix_rule, 
     launcher = ctx.actions.declare_file("{}_/{}".format(ctx.label.name, ctx.label.name))
     ctx.actions.expand_template(
         template = ctx.file._launcher_template,
+        output = launcher,
+        substitutions = launcher_subst,
+        is_executable = True,
+    )
+
+    return launcher
+
+def _bat_launcher(ctx, entry_point_path, log_prefix_rule_set, log_prefix_rule, fixed_args, envs, node_options, paths):
+    """The Windows counterpart of _bash_launcher: a self-contained .bat launcher.
+
+    It replaces routing the bash launcher through bazel_lib's
+    create_windows_native_launcher_script, whose generated .bat needs a runfiles *manifest*
+    (RUNFILES_MANIFEST_ONLY) that an OCI image does not ship, which broke launchers in images.
+    This .bat resolves everything from the runfiles *directory* instead, so it works in images.
+    It bakes in the same values as the bash launcher, only in batch syntax and with backslash
+    paths; js_binary.bat.tpl is a faithful translation of js_binary.sh.tpl.
+    """
+    launcher_subst = {
+        "{{target_label}}": str(ctx.label),
+        "{{template_label}}": str(ctx.attr._launcher_template_bat.label),
+        "{{entry_point_label}}": str(ctx.attr.entry_point.label),
+        "{{entry_point_path}}": _windows_path(entry_point_path),
+        "{{envs}}": "\n".join([
+            (_ENV_SET_IFF_NOT_SET_WINDOWS if iff_not_set else _ENV_SET_WINDOWS).format(
+                var = var,
+                value = _bat_value(value),
+            )
+            for (var, value, iff_not_set) in envs
+        ]),
+        "{{fixed_args}}": _bat_fixed_args(fixed_args),
+        "{{initialize_runfiles}}": BAT_INITIALIZE_RUNFILES,
+        "{{log_prefix_rule_set}}": log_prefix_rule_set,
+        "{{log_prefix_rule}}": log_prefix_rule,
+        "{{launcher}}": _windows_path(ctx.file._launcher_preload.short_path),
+        "{{node_options}}": "\n".join([
+            _NODE_OPTION_WINDOWS.format(value = _bat_value(value))
+            for value in node_options.all
+        ]),
+        "{{node}}": _windows_path(paths.node_path),
+        "{{npm}}": _windows_path(paths.npm_path),
+        "{{workspace_name}}": ctx.workspace_name,
+    }
+
+    # Named like the bash launcher (see the comment there); the '.bat' extension lets cmd and
+    # Bazel recognize it as the Windows executable. js_image_layer consumes it as the rule's
+    # DefaultInfo executable, not by name, so the extension is free to add.
+    launcher = ctx.actions.declare_file("{}_/{}.bat".format(ctx.label.name, ctx.label.name))
+    ctx.actions.expand_template(
+        template = ctx.file._launcher_template_bat,
         output = launcher,
         substitutions = launcher_subst,
         is_executable = True,
@@ -823,10 +919,14 @@ def _create_launcher(ctx, log_prefix_rule_set, log_prefix_rule, fixed_args = [],
     if ctx.attr._use_hermetic_launcher[BuildSettingInfo].value:
         launcher, launcher_js = _js_launcher(ctx, nodeinfo, entry_point_path, log_prefix_rule_set, log_prefix_rule, fixed_args, envs, node_options, paths, is_windows)
         launcher_files = [launcher, launcher_js]
+    elif is_windows:
+        # A self-contained .bat rather than bazel_lib's native launcher, which needs a runfiles
+        # manifest that OCI images do not ship. See _bat_launcher.
+        launcher = _bat_launcher(ctx, entry_point_path, log_prefix_rule_set, log_prefix_rule, fixed_args, envs, node_options, paths)
+        launcher_files = [launcher]
     else:
-        bash_launcher = _bash_launcher(ctx, entry_point_path, log_prefix_rule_set, log_prefix_rule, fixed_args, envs, node_options, paths)
-        launcher = create_windows_native_launcher_script(ctx, bash_launcher) if is_windows else bash_launcher
-        launcher_files = [bash_launcher]
+        launcher = _bash_launcher(ctx, entry_point_path, log_prefix_rule_set, log_prefix_rule, fixed_args, envs, node_options, paths)
+        launcher_files = [launcher]
 
     launcher_files.extend(paths.toolchain_files)
     if nodeinfo.node:

@@ -6,6 +6,7 @@ package(default_visibility = ["//visibility:public"])
 
 exports_files([
     "js_binary.sh.tpl",
+    "js_binary.bat.tpl",
     "js_binary.cjs.tpl",
     "node_bin/node",
     "node_bin_windows/node.bat",
@@ -45,6 +46,7 @@ bzl_library(
     srcs = ["js_binary.bzl"],
     deps = [
         ":bash",
+        ":bat",
         ":js_helpers",
         "//js/private/coverage:extensions",
         "@bazel_lib//lib:copy_to_bin",
@@ -116,6 +118,12 @@ bzl_library(
 bzl_library(
     name = "bash",
     srcs = ["bash.bzl"],
+    visibility = ["//js:__subpackages__"],
+)
+
+bzl_library(
+    name = "bat",
+    srcs = ["bat.bzl"],
     visibility = ["//js:__subpackages__"],
 )
 
