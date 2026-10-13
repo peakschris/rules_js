@@ -495,6 +495,10 @@ def _windows_path(path):
     """
     return path.replace("/", "\\")
 
+def _bat_safe_name(name):
+    """Replaces the characters that break cmd's parsing of a .bat file path with underscores."""
+    return "".join(["_" if ch in ("(", ")", " ") else ch for ch in name.elems()])
+
 def _bat_value(value):
     """Escapes a string for inclusion inside a batch `set "VAR=<value>"` statement.
 
@@ -764,7 +768,10 @@ def _bat_launcher(ctx, entry_point_path, log_prefix_rule_set, log_prefix_rule, f
     # Named like the bash launcher (see the comment there); the '.bat' extension lets cmd and
     # Bazel recognize it as the Windows executable. js_image_layer consumes it as the rule's
     # DefaultInfo executable, not by name, so the extension is free to add.
-    launcher = ctx.actions.declare_file("{}_/{}.bat".format(ctx.label.name, ctx.label.name))
+    # The file name avoids parentheses and spaces: cmd cannot invoke a .bat whose path holds them
+    # when Bazel runs it unquoted. The target name is still used verbatim inside the script.
+    name = _bat_safe_name(ctx.label.name)
+    launcher = ctx.actions.declare_file("{}_/{}.bat".format(name, name))
     ctx.actions.expand_template(
         template = ctx.file._launcher_template_bat,
         output = launcher,
