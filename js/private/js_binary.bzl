@@ -504,6 +504,46 @@ def _bat_value(value):
     """
     return value.replace("%", "%%")
 
+_ENV_VAR_CHARS = {c: True for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_".elems()}
+
+def _bat_env_value(value):
+    """Escapes an env value for a batch `set "VAR=<value>"` and expands `$VAR` / `${VAR}`.
+
+    The bash launcher bakes env values into double quotes, where the shell expands `$VAR`
+    at launch time. rules_jest relies on it: jest_test sets JEST_JUNIT_OUTPUT_FILE to
+    `$$XML_OUTPUT_FILE`, which reaches here as `$XML_OUTPUT_FILE`. Batch has no such
+    expansion, so a reference is rewritten to `%VAR%`, which cmd expands when it reaches the
+    `set` (the envs are not inside a block, and an unset variable expands to empty as in bash).
+    Everything else is escaped as _bat_value does.
+    """
+    parts = []
+    i = 0
+    for _ in range(len(value)):
+        if i >= len(value):
+            break
+        if value[i] == "$" and i + 1 < len(value):
+            if value[i + 1] == "{":
+                end = value.find("}", i + 2)
+                name = value[i + 2:end] if end != -1 else ""
+                if name and all([c in _ENV_VAR_CHARS for c in name.elems()]):
+                    parts.append("%" + name + "%")
+                    i = end + 1
+                    continue
+            else:
+                end = i + 1
+                for _ in range(len(value)):
+                    if end < len(value) and value[end] in _ENV_VAR_CHARS:
+                        end += 1
+                    else:
+                        break
+                if end > i + 1:
+                    parts.append("%" + value[i + 1:end] + "%")
+                    i = end
+                    continue
+        parts.append(_bat_value(value[i]))
+        i += 1
+    return "".join(parts)
+
 def _bat_fixed_args(fixed_args):
     """Renders fixed_args as a batch block of `set "_arg=<token>"` and `call :process_arg` pairs.
 
@@ -703,7 +743,7 @@ def _bat_launcher(ctx, entry_point_path, log_prefix_rule_set, log_prefix_rule, f
         "{{envs}}": "\n".join([
             (_ENV_SET_IFF_NOT_SET_WINDOWS if iff_not_set else _ENV_SET_WINDOWS).format(
                 var = var,
-                value = _bat_value(value),
+                value = _bat_env_value(value),
             )
             for (var, value, iff_not_set) in envs
         ]),
