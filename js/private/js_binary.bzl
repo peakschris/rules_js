@@ -495,6 +495,10 @@ def _windows_path(path):
     """
     return path.replace("/", "\\")
 
+def _bat_safe_name(name):
+    """Replaces the characters that break cmd's parsing of a .bat file path with underscores."""
+    return "".join(["_" if ch in ("(", ")", " ") else ch for ch in name.elems()])
+
 def _bat_value(value):
     """Escapes a string for inclusion inside a batch `set "VAR=<value>"` statement.
 
@@ -504,8 +508,48 @@ def _bat_value(value):
     """
     return value.replace("%", "%%")
 
+_ENV_VAR_CHARS = {c: True for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_".elems()}
+
+def _bat_env_value(value):
+    """Escapes an env value for a batch `set "VAR=<value>"` and expands `$VAR` / `${VAR}`.
+
+    The bash launcher bakes env values into double quotes, where the shell expands `$VAR`
+    at launch time. rules_jest relies on it: jest_test sets JEST_JUNIT_OUTPUT_FILE to
+    `$$XML_OUTPUT_FILE`, which reaches here as `$XML_OUTPUT_FILE`. Batch has no such
+    expansion, so a reference is rewritten to `%VAR%`, which cmd expands when it reaches the
+    `set` (the envs are not inside a block, and an unset variable expands to empty as in bash).
+    Everything else is escaped as _bat_value does.
+    """
+    parts = []
+    i = 0
+    for _ in range(len(value)):
+        if i >= len(value):
+            break
+        if value[i] == "$" and i + 1 < len(value):
+            if value[i + 1] == "{":
+                end = value.find("}", i + 2)
+                name = value[i + 2:end] if end != -1 else ""
+                if name and all([c in _ENV_VAR_CHARS for c in name.elems()]):
+                    parts.append("%" + name + "%")
+                    i = end + 1
+                    continue
+            else:
+                end = i + 1
+                for _ in range(len(value)):
+                    if end < len(value) and value[end] in _ENV_VAR_CHARS:
+                        end += 1
+                    else:
+                        break
+                if end > i + 1:
+                    parts.append("%" + value[i + 1:end] + "%")
+                    i = end
+                    continue
+        parts.append(_bat_value(value[i]))
+        i += 1
+    return "".join(parts)
+
 def _bat_fixed_args(fixed_args):
-    """Renders fixed_args as a batch block of `call :process_arg "<token>"` statements.
+    """Renders fixed_args as a batch block of `set "_arg=<token>"` and `call :process_arg` pairs.
 
     The tokens match the JavaScript launcher's (_shell_tokenize), so the word splitting and
     quote removal the bash launcher gets from the shell is reproduced at analysis time. Two
@@ -518,7 +562,8 @@ def _bat_fixed_args(fixed_args):
     for fixed_arg in fixed_args:
         for token in _shell_tokenize(fixed_arg):
             text = "".join([segment[0] for segment in token])
-            lines.append('call :process_arg "{}"'.format(_bat_value(text)))
+            lines.append('set "_arg={}"'.format(_bat_value(text)))
+            lines.append("call :process_arg")
     return "\n".join(lines)
 
 def _generates_coverage_report(ctx):
@@ -702,7 +747,7 @@ def _bat_launcher(ctx, entry_point_path, log_prefix_rule_set, log_prefix_rule, f
         "{{envs}}": "\n".join([
             (_ENV_SET_IFF_NOT_SET_WINDOWS if iff_not_set else _ENV_SET_WINDOWS).format(
                 var = var,
-                value = _bat_value(value),
+                value = _bat_env_value(value),
             )
             for (var, value, iff_not_set) in envs
         ]),
@@ -723,7 +768,10 @@ def _bat_launcher(ctx, entry_point_path, log_prefix_rule_set, log_prefix_rule, f
     # Named like the bash launcher (see the comment there); the '.bat' extension lets cmd and
     # Bazel recognize it as the Windows executable. js_image_layer consumes it as the rule's
     # DefaultInfo executable, not by name, so the extension is free to add.
-    launcher = ctx.actions.declare_file("{}_/{}.bat".format(ctx.label.name, ctx.label.name))
+    # The file name avoids parentheses and spaces: cmd cannot invoke a .bat whose path holds them
+    # when Bazel runs it unquoted. The target name is still used verbatim inside the script.
+    name = _bat_safe_name(ctx.label.name)
+    launcher = ctx.actions.declare_file("{}_/{}.bat".format(name, name))
     ctx.actions.expand_template(
         template = ctx.file._launcher_template_bat,
         output = launcher,

@@ -103,7 +103,28 @@ process.env.JS_BINARY__LOG_PREFIX = `${LOG_PREFIX_RULE_SET}[${LOG_PREFIX_RULE}]`
 // Runfiles initialization
 // ==============================================================================
 
-// The hermetic_launcher stub should have already initialized RUNFILES_DIR.
+// The hermetic_launcher stub exports only the one runfiles source it selected: a directory
+// is exported as RUNFILES_DIR, but a manifest as RUNFILES_MANIFEST_FILE alone. On Windows the
+// manifest is preferred over the (possibly sparse) sibling directory, so RUNFILES_DIR is
+// commonly absent while RUNFILES_MANIFEST_FILE names the tree. Derive the directory from the
+// manifest path the way the .bat launcher does (see bat.bzl BAT_INITIALIZE_RUNFILES):
+// `<binary>.runfiles_manifest` sits beside `<binary>.runfiles`, or `MANIFEST` sits inside it.
+function runfilesDirFromManifest(manifest) {
+    const resolved = path.resolve(manifest)
+    if (resolved.endsWith('.runfiles_manifest')) {
+        return resolved.slice(0, -'_manifest'.length)
+    }
+    if (path.basename(resolved) === 'MANIFEST') {
+        return path.dirname(resolved)
+    }
+    return undefined
+}
+if (!process.env.RUNFILES_DIR && process.env.RUNFILES_MANIFEST_FILE) {
+    const derived = runfilesDirFromManifest(process.env.RUNFILES_MANIFEST_FILE)
+    if (derived) {
+        process.env.RUNFILES_DIR = derived
+    }
+}
 const runfiles = process.env.RUNFILES_DIR
 if (!runfiles) {
     logFatal('RUNFILES_DIR environment variable is not set')

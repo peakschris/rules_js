@@ -32,11 +32,15 @@ rem Logging helpers
 rem ==============================================================================
 
 rem Emit a log line to the capture file in %~1, or to the real stderr when empty.
+rem The message is captured by a quoted set outside any block and echoed by delayed
+rem expansion, so a message containing parentheses or an ampersand is not parsed as
+rem cmd syntax inside the if/else block below.
 :log_to
+set "_log_msg=%~3"
 if not "%~1"=="" (
-    >>"%~1" echo %~2: %JS_BINARY__LOG_PREFIX%: %~3
+    >>"%~1" echo %~2: !JS_BINARY__LOG_PREFIX!: !_log_msg!
 ) else (
-    >&2 echo %~2: %JS_BINARY__LOG_PREFIX%: %~3
+    >&2 echo %~2: !JS_BINARY__LOG_PREFIX!: !_log_msg!
 )
 exit /b 0
 
@@ -108,10 +112,11 @@ if "!_tp:~1,1!"==":" (
 )
 exit /b 0
 
-rem Classify a single argument (%~1): a --node_options=<opt> flag is split off into
-rem JS_BINARY__NODE_OPTIONS, anything else is appended to the program's ARGS.
+rem Classify the single argument in _arg: a --node_options=<opt> flag is split off into
+rem JS_BINARY__NODE_OPTIONS, anything else is appended to the program's ARGS. The
+rem argument travels in a variable rather than as a parameter of call, because call
+rem re-parses its parameters and would mangle special characters in the value.
 :process_arg
-set "_arg=%~1"
 if not defined _arg exit /b 0
 if "!_arg:~0,15!"=="--node_options=" (
     set "JS_BINARY__NODE_OPTIONS=!JS_BINARY__NODE_OPTIONS! !_arg:~15!"
@@ -300,11 +305,11 @@ rem like `--node_options=--require=<path>`. The raw %* preserves '='. The
 rem `set "_rt_arg="` + `if not defined` guard makes the loop terminate rather than
 rem spin if `for /f` skips a token.
 set "_rt_rest=%*"
-if defined _bazel_bindir_from_flag (
-    rem Drop the consumed `--bazel-bindir <value>` (first two space-delimited tokens).
-    set "_rt_rest="
-    for /f "tokens=2* delims= " %%a in ("%*") do set "_rt_rest=%%b"
-)
+rem Drop the consumed `--bazel-bindir <value>` (first two space-delimited tokens). This is a
+rem single line working on _rt_rest, not a block holding %*: cmd expands %* when it parses
+rem the block, whether or not the flag is present, so a runtime arg with a parenthesis
+rem or a quote would break the parse of every launch.
+if defined _bazel_bindir_from_flag for /f "tokens=2* delims= " %%a in ("!_rt_rest!") do set "_rt_rest=%%b"
 :process_runtime_arg
 if not defined _rt_rest goto :process_runtime_args_done
 set "_rt_arg="
@@ -313,7 +318,8 @@ for /f "tokens=1* delims= " %%a in ("!_rt_rest!") do (
     set "_rt_rest=%%b"
 )
 if not defined _rt_arg goto :process_runtime_args_done
-call :process_arg "!_rt_arg!"
+set "_arg=!_rt_arg!"
+call :process_arg
 goto :process_runtime_arg
 :process_runtime_args_done
 
