@@ -31,12 +31,16 @@ rem ============================================================================
 rem Logging helpers
 rem ==============================================================================
 
-rem Emit a log line to the capture file in %~1, or to the real stderr when empty.
+rem Emit a log line to the capture file in %~1, or to the real stderr when empty. The
+rem message is captured by a quoted set, outside any block, and echoed by delayed
+rem expansion: a message holding a path such as `C:\Program Files (x86)\...` or an `&`
+rem would otherwise be parsed as cmd syntax inside the if/else block below.
 :log_to
+set "_log_msg=%~3"
 if not "%~1"=="" (
-    >>"%~1" echo %~2: %JS_BINARY__LOG_PREFIX%: %~3
+    >>"%~1" echo %~2: !JS_BINARY__LOG_PREFIX!: !_log_msg!
 ) else (
-    >&2 echo %~2: %JS_BINARY__LOG_PREFIX%: %~3
+    >&2 echo %~2: !JS_BINARY__LOG_PREFIX!: !_log_msg!
 )
 exit /b 0
 
