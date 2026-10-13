@@ -505,7 +505,7 @@ def _bat_value(value):
     return value.replace("%", "%%")
 
 def _bat_fixed_args(fixed_args):
-    """Renders fixed_args as a batch block of `call :process_arg "<token>"` statements.
+    """Renders fixed_args as a batch block of `set "_arg=<token>"` and `call :process_arg` pairs.
 
     The tokens match the JavaScript launcher's (_shell_tokenize), so the word splitting and
     quote removal the bash launcher gets from the shell is reproduced at analysis time. Two
@@ -518,7 +518,8 @@ def _bat_fixed_args(fixed_args):
     for fixed_arg in fixed_args:
         for token in _shell_tokenize(fixed_arg):
             text = "".join([segment[0] for segment in token])
-            lines.append('call :process_arg "{}"'.format(_bat_value(text)))
+            lines.append('set "_arg={}"'.format(_bat_value(text)))
+            lines.append("call :process_arg")
     return "\n".join(lines)
 
 def _generates_coverage_report(ctx):

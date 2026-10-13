@@ -112,10 +112,11 @@ if "!_tp:~1,1!"==":" (
 )
 exit /b 0
 
-rem Classify a single argument (%~1): a --node_options=<opt> flag is split off into
-rem JS_BINARY__NODE_OPTIONS, anything else is appended to the program's ARGS.
+rem Classify the single argument in _arg: a --node_options=<opt> flag is split off into
+rem JS_BINARY__NODE_OPTIONS, anything else is appended to the program's ARGS. The
+rem argument travels in a variable rather than as a parameter of call, because call
+rem re-parses its parameters and would mangle special characters in the value.
 :process_arg
-set "_arg=%~1"
 if not defined _arg exit /b 0
 if "!_arg:~0,15!"=="--node_options=" (
     set "JS_BINARY__NODE_OPTIONS=!JS_BINARY__NODE_OPTIONS! !_arg:~15!"
@@ -317,7 +318,8 @@ for /f "tokens=1* delims= " %%a in ("!_rt_rest!") do (
     set "_rt_rest=%%b"
 )
 if not defined _rt_arg goto :process_runtime_args_done
-call :process_arg "!_rt_arg!"
+set "_arg=!_rt_arg!"
+call :process_arg
 goto :process_runtime_arg
 :process_runtime_args_done
 
