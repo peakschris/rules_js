@@ -73,7 +73,7 @@ async function makeBins(nodeModulesPath, scope, segmentsUp) {
                             ...segmentsUp,
                             packageName,
                             binPath
-                        )}" "%*"`
+                        )}" %*`
                     } else {
                         binExec = `#!/usr/bin/env bash\nexec node "${path.join(
                             ...segmentsUp,
