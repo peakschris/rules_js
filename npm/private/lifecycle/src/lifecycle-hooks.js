@@ -69,11 +69,14 @@ async function makeBins(nodeModulesPath, scope, segmentsUp) {
                     let binExec
                     if (isWindows()) {
                         binEntryPath += '.cmd'
+                        // Unquoted %*: cmd.exe must forward args individually. "%*" collapses
+                        // multi-arg bin calls (e.g. tfjs-node: node-pre-gyp install --fallback-to-build)
+                        // into one argument.
                         binExec = `node "${path.join(
                             ...segmentsUp,
                             packageName,
                             binPath
-                        )}" "%*"`
+                        )}" %*`
                     } else {
                         binExec = `#!/usr/bin/env bash\nexec node "${path.join(
                             ...segmentsUp,
