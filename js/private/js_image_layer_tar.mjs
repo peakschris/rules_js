@@ -29,8 +29,9 @@
 // Usage:
 //   node js_image_layer_tar.mjs --tar <tar-bin> --output <archive> --mtree <mtree-file> -- <tar-create-args...>
 
-import { spawnSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { spawn, spawnSync } from 'node:child_process'
+import { createWriteStream, readFileSync } from 'node:fs'
+import { pipeline } from 'node:stream/promises'
 import {
     isSelfReferenceDrop,
     findHardlinkLines,
@@ -38,7 +39,61 @@ import {
     findMissingTarEntries,
 } from './js_image_layer_tar_lib.mjs'
 
-function main() {
+// Run `<tar> <create-args...>`, resolving to { status, error, stderr }.
+//
+// On Windows the archive is NOT handed to bsdtar as `--file <output>`. libarchive
+// registers a regular-file output as the "skip file" (archive_write_open_filename.c:
+// `if (S_ISREG(st.st_mode)) archive_write_set_skip_file(a, st_dev, st_ino)`), and the
+// mtree reader stamps every entry with fstat()'s dev/ino of the opened content file
+// (archive_read_support_format_mtree.c). With the MSVC CRT st_ino is always 0, so every
+// input file on the same drive as the output compares equal to the output archive and
+// is dropped with "Can't add archive to itself". Whether a file collides depends only on
+// which drive it physically lives on, so it is environment dependent and not fixable
+// from the tar CLI. Instead bsdtar writes to a pipe on stdout (`--file -`; not
+// S_ISREG, so no skip file is registered) and we stream it to <output> ourselves.
+function runTar(tarBin, tarArgs, output, spawnOpts) {
+    return new Promise((resolve) => {
+        let args = tarArgs
+        let viaPipe = false
+        if (process.platform === 'win32') {
+            const i = tarArgs.findIndex((a, idx) => idx > 0 && tarArgs[idx - 1] === '--file' && a === output)
+            if (i >= 0) {
+                args = tarArgs.slice()
+                args[i] = '-'
+                viaPipe = true
+            }
+        }
+        if (!viaPipe) {
+            const r = spawnSync(tarBin, args, { ...spawnOpts, stdio: ['inherit', 'inherit', 'pipe'] })
+            resolve({ status: r.status, error: r.error, stderr: r.stderr || '' })
+            return
+        }
+        const child = spawn(tarBin, args, { stdio: ['inherit', 'pipe', 'pipe'] })
+        const chunks = []
+        child.stderr.on('data', (d) => chunks.push(d))
+        const sink = createWriteStream(output)
+        const written = pipeline(child.stdout, sink).then(
+            () => undefined,
+            (e) => e
+        )
+        let spawnError
+        child.on('error', (e) => {
+            spawnError = e
+            sink.destroy()
+        })
+        child.on('close', async (status) => {
+            const writeError = await written
+            const stderr = Buffer.concat(chunks).toString('utf8')
+            resolve({
+                status,
+                error: spawnError || writeError,
+                stderr,
+            })
+        })
+    })
+}
+
+async function main() {
     const argv = process.argv.slice(2)
     const sep = argv.indexOf('--')
     if (sep < 0) {
@@ -71,13 +126,13 @@ function main() {
     const SPAWN_OPTS = { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 }
 
     // 1. Create the archive, capturing stderr while still surfacing it to the user.
-    const create = spawnSync(tarBin, tarArgs, { ...SPAWN_OPTS, stdio: ['inherit', 'inherit', 'pipe'] })
-    const createErr = create.stderr || ''
+    const create = await runTar(tarBin, tarArgs, output, SPAWN_OPTS)
+    const createErr = create.stderr
     if (createErr) {
         process.stderr.write(createErr)
     }
     if (create.error) {
-        process.stderr.write(`js_image_layer_tar: failed to spawn tar: ${create.error.message}\n`)
+        process.stderr.write(`js_image_layer_tar: failed to run tar: ${create.error.message}\n`)
         process.exit(1)
     }
     if (create.status !== 0) {
@@ -141,4 +196,8 @@ function main() {
     process.exit(0)
 }
 
-main()
+main().catch((e) => {
+    process.stderr.write(`js_image_layer_tar: ${e && e.stack ? e.stack : e}
+`)
+    process.exit(1)
+})
