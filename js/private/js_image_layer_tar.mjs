@@ -32,6 +32,8 @@
 import { spawn, spawnSync } from 'node:child_process'
 import { createWriteStream, readFileSync } from 'node:fs'
 import { pipeline } from 'node:stream/promises'
+import { Transform } from 'node:stream'
+import { createGzip } from 'node:zlib'
 import {
     isSelfReferenceDrop,
     findHardlinkLines,
@@ -51,15 +53,78 @@ import {
 // which drive it physically lives on, so it is environment dependent and not fixable
 // from the tar CLI. Instead bsdtar writes to a pipe on stdout (`--file -`; not
 // S_ISREG, so no skip file is registered) and we stream it to <output> ourselves.
+//
+// Compression is NOT left to bsdtar when it writes to the pipe. libarchive pads the final
+// *output* block of a non-regular-file archive with zeros up to the block size (10240), i.e.
+// after the gzip trailer, which strict gzip readers (Go's, used by rules_img) reject with
+// "gzip: invalid header". So for `--gzip` bsdtar emits a plain tar (its zero padding is
+// harmless inside a tar) and we gzip it here. Any other compressor keeps the old direct
+// `--file <output>` behaviour.
+const OTHER_COMPRESSION_FLAGS = new Set([
+    '-j', '-J', '-y', '-Z', '-z', '--bzip2', '--xz', '--lzma', '--lzip', '--lzop', '--lz4',
+    '--zstd', '--lrzip', '--grzip', '--compress', '--use-compress-program', '--gzip', '--gunzip',
+])
+
+// Returns { args, gzipLevel } when tarArgs can be streamed (no compression, or plain gzip that
+// we can reproduce in node), else undefined.
+function planPipe(tarArgs, output) {
+    const args = []
+    let gzip = false
+    let level = 6
+    for (let i = 0; i < tarArgs.length; i++) {
+        const a = tarArgs[i]
+        if (i > 0 && tarArgs[i - 1] === '--file' && a === output) {
+            args.push('-')
+        } else if (a === '--gzip' || a === '-z' || a === '--gunzip') {
+            gzip = true
+        } else if (a.startsWith('--options=')) {
+            const rest = []
+            for (const o of a.slice('--options='.length).split(',')) {
+                const m = /^gzip:(.*)$/.exec(o)
+                if (!m) {
+                    rest.push(o)
+                } else if (m[1] === '!timestamp' || m[1] === 'timestamp') {
+                    // node's gzip header never carries a timestamp
+                } else if (/^compression-level=\d$/.test(m[1])) {
+                    level = Number(m[1].slice('compression-level='.length))
+                } else {
+                    return undefined
+                }
+            }
+            if (rest.length) args.push('--options=' + rest.join(','))
+        } else if (OTHER_COMPRESSION_FLAGS.has(a) || a.startsWith('--use-compress-program=')) {
+            return undefined
+        } else {
+            args.push(a)
+        }
+    }
+    return args.includes('-') ? { args, gzipLevel: gzip ? level : undefined } : undefined
+}
+
+// Force the gzip header OS byte to 3 (unix) so output does not depend on the zlib build.
+function fixGzipOsByte() {
+    let first = true
+    return new Transform({
+        transform(chunk, _enc, cb) {
+            if (first && chunk.length >= 10) {
+                first = false
+                chunk[9] = 3
+            }
+            cb(null, chunk)
+        },
+    })
+}
+
 function runTar(tarBin, tarArgs, output, spawnOpts) {
     return new Promise((resolve) => {
         let args = tarArgs
         let viaPipe = false
+        let gzipLevel
         if (process.platform === 'win32') {
-            const i = tarArgs.findIndex((a, idx) => idx > 0 && tarArgs[idx - 1] === '--file' && a === output)
-            if (i >= 0) {
-                args = tarArgs.slice()
-                args[i] = '-'
+            const plan = planPipe(tarArgs, output)
+            if (plan) {
+                args = plan.args
+                gzipLevel = plan.gzipLevel
                 viaPipe = true
             }
         }
@@ -72,7 +137,8 @@ function runTar(tarBin, tarArgs, output, spawnOpts) {
         const chunks = []
         child.stderr.on('data', (d) => chunks.push(d))
         const sink = createWriteStream(output)
-        const written = pipeline(child.stdout, sink).then(
+        const stages = gzipLevel === undefined ? [child.stdout, sink] : [child.stdout, createGzip({ level: gzipLevel }), fixGzipOsByte(), sink]
+        const written = pipeline(...stages).then(
             () => undefined,
             (e) => e
         )
