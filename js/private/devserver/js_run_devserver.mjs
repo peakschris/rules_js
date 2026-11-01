@@ -445,7 +445,37 @@ function friendlyFileSize(bytes) {
     )
 }
 
-async function syncSymlink(file, src, dst, sandbox, exists) {
+// Returns the stats of the file that a symlinked runfile resolves to, or null if it is a package
+// store link, links to a directory or cannot be resolved.
+//
+// With the node fs patches enabled, lstat reports a runfile that links to a Bazel output as the
+// file itself, so it is copied into the sandbox. Without them, as is always the case on Windows,
+// it is a symlink and the sandbox gets a symlink to it. The symlink's own timestamps never change
+// when Bazel rewrites the output it points to, so such a file is resynced when the stats returned
+// here change, and the sandbox link is given the same timestamps; see syncSymlink.
+async function symlinkedFileStats(file, src) {
+    if (isNodeModulePath(file)) {
+        return null
+    }
+    try {
+        const stats = await fs.promises.stat(src);
+        return stats.isFile() ? stats : null
+    } catch (e) {
+        return null
+    }
+}
+
+// Creates a symlink in the sandbox to a symlink in the runfiles. When targetStats is given, from
+// symlinkedFileStats, the link is to a file whose contents may have changed: an existing link is
+// kept, and the link's timestamps are set to those of the file.
+async function syncSymlink(
+    file,
+    src,
+    dst,
+    sandbox,
+    exists,
+    targetStats = null
+) {
     let symlinkMeta = '';
     if (isNodeModulePath(file)) {
         let linkPath = await fs.promises.readlink(src);
@@ -476,14 +506,46 @@ async function syncSymlink(file, src, dst, sandbox, exists) {
             `Syncing symlink ${file}${symlinkMeta ? ` (${symlinkMeta})` : ''}`
         );
     }
-    if (exists) {
-        await fs.promises.unlink(dst);
-    } else {
-        // Intentionally synchronous; see comment on mkdirpSync
-        mkdirpSync(path.dirname(dst));
+    if (!(exists && targetStats && (await isSymlinkTo(dst, src)))) {
+        if (exists) {
+            await fs.promises.unlink(dst);
+        } else {
+            // Intentionally synchronous; see comment on mkdirpSync
+            mkdirpSync(path.dirname(dst));
+        }
+        await fs.promises.symlink(src, dst);
     }
-    await fs.promises.symlink(src, dst);
+    if (targetStats) {
+        // Watchers disagree about the timestamps of a symlink: some lstat it (webpack's watchpack)
+        // and others stat it (webpack's snapshots, chokidar). Give the link the timestamps of the
+        // file so that both see the same change. This also updates a link that was kept above,
+        // which watchers see as a change to it.
+        try {
+            // In seconds rather than as Dates, which would drop the sub-millisecond part.
+            await fs.promises.lutimes(
+                dst,
+                targetStats.atimeMs / 1000,
+                targetStats.mtimeMs / 1000
+            );
+        } catch (e) {
+            if (JS_BINARY__LOG_DEBUG) {
+                console.error(
+                    `Could not set the timestamps of symlink ${file}: ${e.message}`
+                );
+            }
+        }
+    }
     return 1
+}
+
+async function isSymlinkTo(p, target) {
+    try {
+        return (
+            path.resolve(await fs.promises.readlink(p)) === path.resolve(target)
+        )
+    } catch (e) {
+        return false
+    }
 }
 
 async function syncDirectory(file, src, sandbox, writePerm) {
@@ -554,8 +616,12 @@ async function syncRecursive(file, _, sandbox, writePerm) {
             () => fs.promises.lstat(src),
             `lstat for ${src}`
         );
+        const targetStats = lstat.isSymbolicLink()
+            ? await symlinkedFileStats(file, src)
+            : null;
+        const mtimeMs = (targetStats || lstat).mtimeMs;
         const last = syncedTime.get(file);
-        if (!lstat.isDirectory() && last && lstat.mtimeMs == last) {
+        if (!lstat.isDirectory() && last && mtimeMs == last) {
             // this file is already up-to-date
             if (JS_BINARY__LOG_DEBUG) {
                 console.error(
@@ -565,9 +631,9 @@ async function syncRecursive(file, _, sandbox, writePerm) {
             return 0
         }
         const exists = syncedTime.has(file) || fs.existsSync(dst);
-        syncedTime.set(file, lstat.mtimeMs);
+        syncedTime.set(file, mtimeMs);
         if (lstat.isSymbolicLink()) {
-            return syncSymlink(file, src, dst, sandbox, exists)
+            return syncSymlink(file, src, dst, sandbox, exists, targetStats)
         } else if (lstat.isDirectory()) {
             return syncDirectory(file, src, sandbox, writePerm)
         } else {
@@ -1193,7 +1259,14 @@ async function cycleSyncRecurse(cycle, file, isDirectory, sandbox, writePerm) {
     }
 
     if (srcRunfilesInfo.is_symlink) {
-        return syncSymlink(file, src, dst, sandbox, exists)
+        return syncSymlink(
+            file,
+            src,
+            dst,
+            sandbox,
+            exists,
+            await symlinkedFileStats(file, src)
+        )
     }
 
     if (isDirectory) {
