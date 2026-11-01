@@ -9,9 +9,13 @@ load("//js/private:js_info.bzl", "JsInfo")
 load(":npm_package_info.bzl", "NpmPackageInfo")
 load(":npm_package_store_info.bzl", "NpmPackageStoreInfo")
 load(":utils.bzl", "utils")
-load(":windows_execroot.bzl", "WINDOWS_EXECROOT_ATTR", "windows_symlink_target")
+load(":windows_execroot.bzl", "WINDOWS_EXECROOT_ATTR", "WindowsExecrootInfo", "windows_symlink_target")
 
 _SUPPORTS_SYMLINK_TARGET_TYPE = bazel_features.rules.symlink_action_has_target_type
+
+# SetCurrentDirectoryW accepts at most MAX_PATH - 2 (258) characters; keep a margin for the
+# drive-letter normalization and trailing separator bsdtar may add.
+_MAX_CHDIR_PATH = 248
 
 _EXTRACT_EXECUTION_REQUIREMENTS = {
     "supports-path-mapping": "1",
@@ -261,7 +265,16 @@ def _npm_package_store_impl(ctx):
                 # must be globally unique (all internal store targets live in the
                 # root package) yet short, so derive it from a 64-bit hash of the
                 # store path rather than the long store name itself.
-                if is_windows:
+                # The chdir limit only bites when the absolute store path is long. With a known
+                # execution root (Windows host, see windows_execroot.bzl) extract straight into the
+                # store TreeArtifact whenever its absolute path fits: a staging copy doubles the
+                # files Bazel writes and checks for every package.
+                execroot = ctx.attr._windows_execroot[WindowsExecrootInfo].path
+                needs_stage = is_windows and (
+                    not execroot or
+                    len(execroot) + 1 + len(package_store_directory.path) > _MAX_CHDIR_PATH
+                )
+                if needs_stage:
                     stage_id = "%x_%x" % (
                         hash(package_store_directory_path) & 0xffffffff,
                         hash("aspect_rules_js:" + package_store_directory_path) & 0xffffffff,
@@ -305,7 +318,7 @@ def _npm_package_store_impl(ctx):
                     env = getattr(bsdtar.tarinfo, "default_env", {}),
                 )
 
-                if is_windows:
+                if needs_stage:
                     # Move the staged extract into the deep store TreeArtifact using
                     # the long-path-aware copy_directory binary (same one used for the
                     # non-tarball case below).
