@@ -771,8 +771,10 @@ async function runIBazelProtocol(
                 // `proc` is spawned
                 await new Promise((resolve) => {
                     // note: ignoring error - if this write to stdin fails,
-                    // it's probably okay. Can add error handling later if needed
-                    proc.stdin.write(chunk, resolve)
+                    // it's probably okay. Can add error handling later if needed.
+                    // readline strips the line terminator, so add it back so
+                    // that tools reading the ibazel messages line by line see each one.
+                    proc.stdin.write(chunk + '\n', resolve)
                 })
             } catch (e) {
                 console.error(
