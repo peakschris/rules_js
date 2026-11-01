@@ -348,4 +348,43 @@ for (const protocol of ['ibazel', 'watch']) {
     )
 }
 
+// A changed file is overwritten in place rather than deleted and recreated, which watchers can miss
+// (https://github.com/aspect-build/rules_js/issues/3039), also when its copy is read-only.
+for (const protocol of ['ibazel', 'watch']) {
+    const file = `app/${protocol}-overwritten.js`
+    const src = path.join(main, file)
+    const writeSource = (contents, mtime) => {
+        if (fs.existsSync(src)) {
+            fs.chmodSync(src, 0o644)
+        }
+        write(src)
+        fs.writeFileSync(src, contents)
+        fs.chmodSync(src, 0o444)
+        fs.utimesSync(src, mtime, mtime)
+    }
+    writeSource('v1', new Date(2020, 0, 1))
+    const { devserver, sandbox } = await newDevserver(`${protocol}-overwritten`)
+    const config = {}
+    const entries = [[file, 0]]
+    const copy = path.join(sandbox, file)
+    await resync(devserver, protocol, sandbox, config, entries)
+    check(`${protocol}: file copied`, fs.readFileSync(copy, 'utf8'), 'v1')
+
+    const ino = fs.lstatSync(copy, { bigint: true }).ino
+    writeSource('v2', new Date(2021, 0, 1))
+    await resync(devserver, protocol, sandbox, config, entries, {
+        [`_main/${file}`]: {},
+    })
+    check(
+        `${protocol}: changed file copied`,
+        fs.readFileSync(copy, 'utf8'),
+        'v2'
+    )
+    check(
+        `${protocol}: copy overwritten in place`,
+        fs.lstatSync(copy, { bigint: true }).ino,
+        ino
+    )
+}
+
 fs.rmSync(base, { recursive: true, force: true })
