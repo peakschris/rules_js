@@ -44,3 +44,12 @@ js_test(
         "__RULES_JS_UNIT_TEST__": "1",
     },
 )
+
+js_test(
+    name = "js_run_devserver_symlinked_files_test",
+    data = ["//js/private/devserver:js_devserver_entrypoint"],
+    entry_point = "js_run_devserver_symlinked_files.spec.mjs",
+    env = {
+        "__RULES_JS_UNIT_TEST__": "1",
+    },
+)
