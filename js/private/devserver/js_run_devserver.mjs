@@ -977,7 +977,9 @@ async function cycleSyncRecurse(cycle, file, isDirectory, sandbox, writePerm) {
     // TODO: potentially fetch mtime from cycle.sources[src].mtime?
     syncedTime.set(file, Date.now());
 
-    const srcRunfilesPath = JS_BINARY__WORKSPACE + path.sep + file;
+    // The watch protocol keys sources by '/' separated runfiles paths on every platform; see the
+    // filter in watchProtocolCycle.
+    const srcRunfilesPath = `${JS_BINARY__WORKSPACE}/${file}`;
     const srcRunfilesInfo = cycle.sources[srcRunfilesPath];
 
     // The cycleSyncRecurse function should only be called for files directly from the CYCLE event.
