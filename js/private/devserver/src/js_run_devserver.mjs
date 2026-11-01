@@ -285,7 +285,14 @@ async function syncFile(file, src, dst, exists, lstat, writePerm) {
             })`
         )
     }
-    if (exists) {
+    // Overwrite an existing copy in place rather than deleting and recreating it, which watchers
+    // can miss, for example when the new file reuses the inode of the deleted one
+    // (https://github.com/aspect-build/rules_js/issues/3039). Copies of Bazel outputs are
+    // read-only unless grant_sandbox_write_permissions is set, so make it writable first.
+    const old = exists ? await fs.promises.lstat(dst).catch(() => null) : null
+    if (old && old.isFile()) {
+        await fs.promises.chmod(dst, old.mode | fs.constants.S_IWUSR)
+    } else if (old) {
         await fs.promises.unlink(dst)
     } else {
         // Intentionally synchronous; see comment on mkdirpSync
