@@ -9,6 +9,7 @@ load("//js/private:js_info.bzl", "JsInfo")
 load(":npm_package_info.bzl", "NpmPackageInfo")
 load(":npm_package_store_info.bzl", "NpmPackageStoreInfo")
 load(":utils.bzl", "utils")
+load(":windows_execroot.bzl", "WINDOWS_EXECROOT_ATTR", "windows_symlink_target")
 
 _SUPPORTS_SYMLINK_TARGET_TYPE = bazel_features.rules.symlink_action_has_target_type
 
@@ -161,6 +162,7 @@ If set, takes precedence over the package version in the `NpmPackageInfo` src.
         doc = """If true, prints out verbose logs to stdout""",
     ),
     "_windows_constraint": attr.label(default = "@platforms//os:windows"),
+    "_windows_execroot": WINDOWS_EXECROOT_ATTR,
 }
 
 def _npm_package_store_impl(ctx):
@@ -586,7 +588,7 @@ def _symlink_package_store(ctx, package_store_name, target, name):
         name,
     )
     symlink = ctx.actions.declare_symlink(store_symlink_path)
-    target_path = ("../../../" if "/" in name else "../../") + target
+    target_path = windows_symlink_target(ctx, symlink, ("../../../" if "/" in name else "../../") + target)
     if _SUPPORTS_SYMLINK_TARGET_TYPE:
         ctx.actions.symlink(output = symlink, target_path = target_path, target_type = "directory")
     else:

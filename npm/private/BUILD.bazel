@@ -45,6 +45,7 @@ bzl_library(
     deps = [
         ":npm_package_store_info",
         ":utils",
+        ":windows_execroot",
         "//js:providers",
         "@bazel_lib//lib:copy_directory",
         "@bazel_skylib//lib:paths",
@@ -59,6 +60,7 @@ bzl_library(
         ":npm_package_info",
         ":npm_package_store_info",
         ":utils",
+        ":windows_execroot",
         "@bazel_lib//lib:copy_directory",
         "@bazel_skylib//lib:paths",
     ],
@@ -148,6 +150,7 @@ bzl_library(
     name = "utils",
     srcs = ["utils.bzl"],
     deps = [
+        ":windows_execroot",
         "@bazel_features//:features",
         "@bazel_lib//lib:paths",
         "@bazel_lib//lib:repo_utils",
@@ -155,6 +158,11 @@ bzl_library(
         "@bazel_skylib//lib:types",
         "@bazel_tools//tools/build_defs/repo:cache.bzl",
     ],
+)
+
+bzl_library(
+    name = "windows_execroot",
+    srcs = ["windows_execroot.bzl"],
 )
 
 bzl_library(

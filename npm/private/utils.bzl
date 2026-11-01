@@ -3,6 +3,7 @@
 load("@bazel_features//:features.bzl", "bazel_features")
 load("@bazel_lib//lib:repo_utils.bzl", "repo_utils")
 load("@bazel_skylib//lib:paths.bzl", "paths")
+load(":windows_execroot.bzl", "WindowsExecrootInfo")
 
 # Bazel 9+ supports target_type="directory" on ctx.actions.symlink which creates
 # junctions instead of file symlinks on Windows. Without this, Node.js gets EPERM
@@ -171,8 +172,13 @@ def _relative_output_path(target_path, frm_file_path):
     return "/".join([".."] * (len(f) - 1 - common) + t[common:])
 
 def _make_directory_symlink(ctx, symlink_path, target_path):
+    # `ctx` must have the `_windows_execroot` attribute (see windows_execroot.bzl).
     symlink = ctx.actions.declare_symlink(symlink_path)
     relative_target = _relative_output_path(target_path, symlink.path)
+    execroot = ctx.attr._windows_execroot[WindowsExecrootInfo].path
+    if execroot:
+        # Windows junction: declare the absolute target Bazel writes (see windows_execroot.bzl).
+        relative_target = execroot + "/" + target_path
     if _SUPPORTS_SYMLINK_TARGET_TYPE:
         ctx.actions.symlink(output = symlink, target_path = relative_target, target_type = "directory")
     else:

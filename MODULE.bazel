@@ -57,6 +57,10 @@ pnpm = use_extension("@aspect_rules_js//npm:extensions.bzl", "pnpm")
 pnpm.pnpm(name = "pnpm")
 use_repo(pnpm, "pnpm", "pnpm__links")
 
+# Absolute execution root for Windows directory symlinks (junctions), see npm/private/windows_execroot.bzl.
+windows_execroot = use_extension("@aspect_rules_js//npm/private:windows_execroot.bzl", "windows_execroot")
+use_repo(windows_execroot, "aspect_rules_js_windows_execroot")
+
 bazel_lib_toolchains = use_extension("@bazel_lib//lib:extensions.bzl", "toolchains")
 use_repo(
     bazel_lib_toolchains,

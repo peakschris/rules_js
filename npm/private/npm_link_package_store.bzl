@@ -3,6 +3,7 @@
 load("//js:providers.bzl", "JsInfo")
 load(":npm_package_store_info.bzl", "NpmPackageStoreInfo")
 load(":utils.bzl", "utils")
+load(":windows_execroot.bzl", "WINDOWS_EXECROOT_ATTR")
 
 _DOC = """Links an npm package that is backed by an npm_package_store into a node_modules tree as a direct dependency.
 
@@ -56,6 +57,7 @@ If set, takes precedence over the package name in the src npm_package_store.
         https://github.com/pnpm/pnpm/issues/5131.
         """,
     ),
+    "_windows_execroot": WINDOWS_EXECROOT_ATTR,
 }
 
 _BIN_TMPL = """#!/bin/sh
